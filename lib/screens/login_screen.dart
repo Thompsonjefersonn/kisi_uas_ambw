@@ -12,6 +12,12 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController(); // Tambah controller password
+  final  Map <String, String> _validUsers = {
+    "admin": "12345",
+    "user": "12345",
+    "guest": "12345",
+  };
+
 
   void _login() async {
     // Validasi Sederhana (Hardcoded)
@@ -19,7 +25,7 @@ class _LoginScreenState extends State<LoginScreen> {
     String password = _passwordController.text;
 
     // Contoh: Username bebas, tapi Password wajib "12345"
-    if (username == "admin" && password == "12345") {
+    if (_validUsers.containsKey(username) && _validUsers[username] == password) {
       
       final prefs = await SharedPreferences.getInstance();
       
