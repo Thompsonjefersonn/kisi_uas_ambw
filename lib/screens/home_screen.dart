@@ -37,7 +37,7 @@ class _HomeScreenState extends State<HomeScreen> {
       String? savedData = prefs.getString('notes_data_final');
       
       if (savedData != null) {
-        // Isi kedua list dengan data yang sama saat awal buka
+        // Decode data
         _allNotes = List<Map<String, dynamic>>.from(jsonDecode(savedData));
         _foundNotes = _allNotes; 
       }
@@ -47,19 +47,14 @@ class _HomeScreenState extends State<HomeScreen> {
   // --- LOGIKA PENCARIAN ---
   void _runFilter(String keyword) {
     List<Map<String, dynamic>> results = [];
-    
     if (keyword.isEmpty) {
-      // Kalau search bar kosong, tampilkan semua data lagi
       results = _allNotes;
     } else {
-      // Kalau ada ketikan, filter dari _allNotes
       results = _allNotes
           .where((item) =>
               item["title"].toLowerCase().contains(keyword.toLowerCase()))
           .toList();
     }
-
-    // Update UI
     setState(() {
       _foundNotes = results;
     });
@@ -68,7 +63,6 @@ class _HomeScreenState extends State<HomeScreen> {
   // --- 2. SAVE DATA ---
   void _saveData() async {
     final prefs = await SharedPreferences.getInstance();
-    // Yang disimpan ke memori HP selalu _allNotes (data lengkap)
     await prefs.setString('notes_data_final', jsonEncode(_allNotes));
   }
 
@@ -78,11 +72,13 @@ class _HomeScreenState extends State<HomeScreen> {
     required String title,
     required String content,
     required String date,
+    bool isDone = false, // Default false jika baru
   }) {
     Map<String, dynamic> newNote = {
       'title': title,
       'content': content,
       'date': date,
+      'isDone': isDone,
     };
 
     setState(() {
@@ -90,53 +86,76 @@ class _HomeScreenState extends State<HomeScreen> {
         // Tambah Baru
         _allNotes.add(newNote);
       } else {
-        // Edit: Hati-hati, index di _foundNotes bisa beda dengan _allNotes saat searching.
-        // Untuk UAS yg aman: Kita cari data asli di _allNotes lalu update.
-        // Tapi cara paling gampang biar gak bug:
-        // Update data di database utama (_allNotes)
-        // Note: Logic index ini works kalau tidak sedang searching. 
-        // Jika sedang searching, logic update index agak kompleks. 
-        // Solusi simpel UAS: Update _allNotes, lalu reset search.
-        
-        // Cari item yang diedit di _allNotes (berdasarkan referensi list lama/simple replace)
-        // Asumsi UAS: Index didapat dari _foundNotes yg sedang tampil.
-        // Kita pakai logika sederhana: Refresh ulang list.
+        // Logic Edit Aman: Update _allNotes
+        // Jika sedang search, matikan search dulu biar index sinkron
         if (_searchController.text.isNotEmpty) {
-           // Jika sedang search, edit agak tricky. Kita disable search dulu biar aman.
            _searchController.clear();
            _foundNotes = _allNotes;
         }
         _allNotes[index] = newNote;
       }
       
-      // Setelah nambah/edit, reset tampilan agar muncul data terbaru
+      // Reset tampilan
       _foundNotes = _allNotes; 
-      _searchController.clear(); // Bersihkan search bar
+      _searchController.clear();
     });
     _saveData();
   }
 
-  // --- 4. DELETE ---
+  // --- 4. DELETE DENGAN KONFIRMASI ---
+  void _confirmDelete(int index) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Hapus Jadwal?"),
+        content: const Text("Data ini akan dihapus permanen."),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context), 
+            child: const Text("Batal")
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () {
+              Navigator.pop(context); // Tutup dialog
+              _deleteNote(index); // Eksekusi hapus
+            }, 
+            child: const Text("Hapus", style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _deleteNote(int index) {
     setState(() {
-      // Hapus dari _foundNotes (tampilan)
-      // Tapi kita harus hapus juga dari _allNotes (database)
-      
-      // Kasus: User search "Mat", muncul 1 item (index 0).
-      // Padahal di database aslinya dia index ke-5.
-      // Kalau langsung removeAt(0), salah hapus data!
-      
-      // Solusi Aman UAS: Ambil objectnya, cari di master, hapus.
       Map<String, dynamic> itemToDelete = _foundNotes[index];
-      
       _allNotes.removeWhere((element) => element == itemToDelete);
-      _foundNotes = _allNotes; // Reset list
-      _searchController.clear(); // Reset search bar
+      _foundNotes = _allNotes; 
+      _searchController.clear(); 
+    });
+    _saveData();
+    ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Data berhasil dihapus")));
+  }
+
+  // --- 5. TOGGLE CHECKBOX (SELESAI/BELUM) ---
+  void _toggleDone(int index) {
+    setState(() {
+      // Ambil status sekarang (pakai ?? false untuk jaga-jaga kalau null)
+      bool currentStatus = _foundNotes[index]['isDone'] ?? false;
+      
+      // Ubah status jadi kebalikannya
+      _foundNotes[index]['isDone'] = !currentStatus;
+      
+      // Karena _foundNotes merujuk ke object memory yang sama dengan _allNotes,
+      // data di _allNotes biasanya otomatis update.
+      // Tapi untuk memastikan save benar, kita panggil _saveData.
     });
     _saveData();
   }
 
-  // --- LOGOUT & DATE PICKER SAMA SEPERTI SEBELUMNYA ---
+  // --- LOGOUT & DATE PICKER ---
   void _logout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('isLoggedIn', false);
@@ -166,11 +185,16 @@ class _HomeScreenState extends State<HomeScreen> {
     final titleController = TextEditingController();
     final contentController = TextEditingController();
     final dateController = TextEditingController();
+    
+    // Simpan status isDone saat ini (untuk edit)
+    bool currentDoneStatus = false;
 
     if (index != null) {
       titleController.text = _foundNotes[index]['title'];
       contentController.text = _foundNotes[index]['content'];
       dateController.text = _foundNotes[index]['date'];
+      // Ambil status done yang ada
+      currentDoneStatus = _foundNotes[index]['isDone'] ?? false;
     }
 
     showDialog(
@@ -213,6 +237,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   title: titleController.text,
                   content: contentController.text,
                   date: dateController.text,
+                  isDone: currentDoneStatus, // Pertahankan status saat edit
                 );
                 Navigator.pop(context);
               }
@@ -250,28 +275,26 @@ class _HomeScreenState extends State<HomeScreen> {
         onPressed: () => _showForm(),
         child: const Icon(Icons.add),
       ),
-      // PERUBAHAN UI UTAMA DISINI
+      
+      // --- BODY UTAMA ---
       body: Column(
         children: [
-          // 1. BAGIAN SEARCH BAR
+          // 1. Search Bar
           Padding(
             padding: const EdgeInsets.all(10.0),
             child: TextField(
               controller: _searchController,
-              onChanged: (value) => _runFilter(value), // Panggil fungsi saat ngetik
+              onChanged: (value) => _runFilter(value),
               decoration: InputDecoration(
                 labelText: 'Cari Jadwal...',
                 prefixIcon: const Icon(Icons.search),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                // Tombol silang untuk hapus search
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                 suffixIcon: _searchController.text.isNotEmpty
                     ? IconButton(
                         icon: const Icon(Icons.clear),
                         onPressed: () {
                           _searchController.clear();
-                          _runFilter(''); // Reset list
+                          _runFilter('');
                         },
                       )
                     : null,
@@ -279,47 +302,80 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
 
-          // 2. BAGIAN LIST VIEW
+          // 2. List View
           Expanded(
             child: _foundNotes.isEmpty
                 ? const Center(child: Text("Tidak ada data ditemukan"))
                 : ListView.builder(
                     padding: const EdgeInsets.symmetric(horizontal: 10),
-                    itemCount: _foundNotes.length, // Pakai foundNotes
+                    itemCount: _foundNotes.length,
                     itemBuilder: (context, index) {
-                      final note = _foundNotes[index]; // Pakai foundNotes
+                      final note = _foundNotes[index];
+                      // Cek status selesai (aman null)
+                      bool isDone = note['isDone'] ?? false;
+
                       return Card(
                         elevation: 3,
                         margin: const EdgeInsets.only(bottom: 12),
+                        // Warna card jadi abu-abu jika selesai
+                        color: isDone ? Colors.grey[200] : Colors.white,
                         child: ListTile(
-                          contentPadding: const EdgeInsets.all(15),
-                          leading: CircleAvatar(
-                            backgroundColor: Colors.deepPurple,
-                            foregroundColor: Colors.white,
-                            radius: 30,
-                            child: Padding(
-                              padding: const EdgeInsets.all(5.0),
-                              child: Text(
-                                note['date'].toString().split('-').last,
-                                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                          contentPadding: const EdgeInsets.all(10),
+                          // LOGIKA LEADING: Row (Checkbox + Tanggal)
+                          leading: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Checkbox(
+                                value: isDone,
+                                onChanged: (val) => _toggleDone(index),
                               ),
-                            ),
+                              CircleAvatar(
+                                backgroundColor: isDone ? Colors.grey : Colors.deepPurple,
+                                foregroundColor: Colors.white,
+                                radius: 25,
+                                child: Padding(
+                                  padding: const EdgeInsets.all(2.0),
+                                  child: Text(
+                                    note['date'].toString().split('-').last,
+                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                           title: Text(
                             note['title'],
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                              // Coret tulisan jika selesai
+                              decoration: isDone ? TextDecoration.lineThrough : TextDecoration.none,
+                              color: isDone ? Colors.grey : Colors.black,
+                            ),
                           ),
                           subtitle: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(note['content']),
-                              Text("Deadline: ${note['date']}", style: TextStyle(color: Colors.blue[700])),
+                              Text(
+                                note['content'],
+                                style: TextStyle(
+                                  decoration: isDone ? TextDecoration.lineThrough : TextDecoration.none,
+                                  color: isDone ? Colors.grey : Colors.black87,
+                                ),
+                              ),
+                              Text(
+                                "Deadline: ${note['date']}",
+                                style: TextStyle(
+                                  color: isDone ? Colors.grey : Colors.blue[700],
+                                ),
+                              ),
                             ],
                           ),
                           trailing: PopupMenuButton(
                             onSelected: (value) {
                               if (value == 'edit') _showForm(index: index);
-                              if (value == 'delete') _deleteNote(index);
+                              // Panggil fungsi confirm delete biar aman
+                              if (value == 'delete') _confirmDelete(index);
                             },
                             itemBuilder: (context) => [
                               const PopupMenuItem(value: 'edit', child: Text("Edit")),
