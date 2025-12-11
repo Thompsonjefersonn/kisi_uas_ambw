@@ -15,7 +15,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   void _login() async {
     // Validasi Sederhana (Hardcoded)
-    String username = _usernameController.text;
+    String username = _usernameController.text;   
     String password = _passwordController.text;
 
     // Contoh: Username bebas, tapi Password wajib "12345"
